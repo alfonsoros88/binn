@@ -2,7 +2,7 @@
 theme: ./dark.json
 ---
 
-# Building a Rust interface for binn
+# Building a Rust interface for a C library 🦀
 
 ## Part0: Fundamentals
 
@@ -12,13 +12,20 @@ theme: ./dark.json
 ## Part1: Building the bindings crate
 
 - Using `bindgen` and `build.rs`
-- Use the `cc` crate to build and link `binn`
+- Use the `cc` crate to build and link the library
 
-## Part2: Building the rust interface for `binn`
+## Part2: Building the rust interface
 
-- Use scoping to manage resource allocations
-- Macros for generate repetitive code
-- Undefined Behavour all over the place
+- Resource management
+- Code generation with macros and generics
+- Lifetimes and ownership
+- Tons of Undefined Behavour
+
+---
+
+# Part0: Fundamentals
+
+Symbols and Calling Conventions
 
 ---
 
@@ -60,9 +67,10 @@ The **calling convention** defines:
 
 ## Calling Conventions
 
+- A function's calling convention is part of its type
 - The calling convention is specified next to `extern`
 - Main calling conventions are `"C"` and `"rust"`
-- The `"C"` is used by default if `extern` is specified
+- `"C"` is used by default if `extern` is specified
 
 ```rust
 extern {
@@ -74,8 +82,13 @@ extern "C" {
 }
 ```
 
-- A function's calling convention is part of its type
 - Every rust function is implicitly declared with `extern "rust"`
+
+```rust
+fn foo() {...}
+
+extern "rust" fn foo() {...}
+```
 
 ---
 
@@ -202,12 +215,105 @@ assert_eq!(unsafe { callback(foo) }, 42);
 
 ---
 
-## bindgen and build.rs
+### Hands-on example
+
+---
+
+# Creating a Rust interface for a C library
+
+Section Goal:
+
+- The chosen library for today's demo: `binn`
+- Organazing Bindings + Rust interface 🦀
+
+## Part1: Create bindings for `binn`
+
+- The `build.rs` hack
+- `bindgen` to generate bindings automatically
+- `cc` crate for compiling `binn`
+
+## Part2: Safe Rust interface around the bindings
+
+- Memory management
+- Code generation
+- Lifetime and ownership
+- A lot of unsafe code
+
+---
+
+## Few words about binn
+
+`binn` is a very simple C library for serialization.
+
+Uses data containers like lists, maps and objects.
+
+A small example:
+
+```c
+  // create a new object
+  obj = binn_object();
+
+  // add values to it
+  binn_object_set_int32(obj, "id", 123);
+  binn_object_set_str(obj, "name", "Samsung Galaxy");
+  binn_object_set_double(obj, "price", 299.90);
+
+  // pass the buffer to another function
+  // send over the network or save to a file...
+  another_function(binn_ptr(obj), binn_size(obj));
+
+  // release the object
+  binn_free(obj);
+```
+
+---
+
+## Organizing Bindings + Rust Interface 🦀
+
+The bindings are ship in a `*-sys` crate (e.g. `openssl-sys`) and the Rust
+high-level interface is provided in separate crate (e.g. `openssl`)
+
+The `*-sys` crates have two main functionalities:
+
+- Link to the native library
+- Provide just the bindings and declarations
+
+## Why is this?
+
+- Only one crate can link to a native library
+- Handle changes in the C library or in `bindgen`
+- The interface changes can be adopted incrementally
+
+---
+
+# Part1: binn-sys crate
 
 #### build.rs
 
 - A script executed before building the crate
-- In particular, it is useful for building the and linking dependencies
+- In particular useful for building and linking dependencies
+
+## Enabled in the `Cargo.toml`
+
+```toml
+[package]
+...
+build = "some-file.rs"
+```
+
+## How it works:
+
+```rust
+fn main() {
+    println!("cargo:rerun-if-changed=foo.json");
+    println!("cargo:rerun-if-env-changed=BAR");
+    println!("cargo:rustc-cfg=KEY={}", "value");
+    println!("cargo:rustc-link-lib=foo");
+    println!("cargo:rustc-link-search=./lib/dir/");
+}
+```
+
+---
 
 #### bindgen
 
@@ -215,12 +321,54 @@ assert_eq!(unsafe { callback(foo) }, 42);
 - It comes with a stand-alone binary
 - As a library, it can be called from a **build.rs** script.
 
+```rust
+fn main() {
+    println!("cargo:rustc-link-lib=foo");
+    println!("cargo:rerun-if-changed=wrapper.h");
+    let bindings = bindgen::Builder::default()
+        .header("wrapper.h")
+        .generate()
+        .expect("failed to generate bindings");
+
+    let out_path = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    bindings
+        .write_to_file(out_path.join("bindings.rs"))
+        .expect("failed to write bindings");
+}
+```
+
 ---
 
-# Part1: Creating binn-sys
+#### cc
+
+- Builds and links native code
+- Automatically deals with cross compilation and environment
+- Can handle C, C++ and assembly
+
+```rust
+fn main() {
+    println!("cargo:rerun-if-changed=src/hello.c");
+    // Use the `cc` crate to build a C file and statically link it.
+    cc::Build::new()
+        .file("src/hello.c")
+        .compile("hello");
+}
+```
+
+---
+
+## Hands-on demo to build binn-sys
+
+---
+
+# Part2: binn crate
 
 Goal:
-    - Create `binn-sys` that provides just the bindings for `binn`
-    - Use `bindgen` to generate the bindings from a `build.rs`
-    - Use `cc` to build and link `binn`
+- Create a safe interface for a `binn_object`
+- Enable serialization for basic types
+- Deserialize `binn_object`s
+
+---
+
+## Directly to hands-on
 
