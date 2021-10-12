@@ -1,14 +1,14 @@
 use std::{
     convert::{TryFrom, TryInto},
     ffi::{c_void, CStr},
-    os::raw::c_int,
+    os::raw::{c_char, c_int},
 };
 
 use binn_sys::binn_ptr;
 
 #[non_exhaustive]
 #[derive(Debug)]
-pub enum BinnValue {
+pub enum BinnValue<'a> {
     Int8(i8),
     Int16(i16),
     Int32(i32),
@@ -20,11 +20,12 @@ pub enum BinnValue {
     Float32(f32),
     Float64(f64),
     Bool(bool),
+    Str(&'a CStr),
 }
 
 macro_rules! impl_from {
     ($t:ty, $enum:ident) => {
-        impl From<$t> for BinnValue {
+        impl<'a> From<$t> for BinnValue<'a> {
             fn from(x: $t) -> Self {
                 BinnValue::$enum(x)
             }
@@ -43,16 +44,17 @@ impl_from!(u64, UInt64);
 impl_from!(f32, Float32);
 impl_from!(f64, Float64);
 impl_from!(bool, Bool);
+impl_from!(&'a CStr, Str);
 
 #[derive(Debug)]
 pub struct WrongBinnValue;
 
 macro_rules! impl_tryfrom {
     ($t:ty, $enum:ident) => {
-        impl TryFrom<BinnValue> for $t {
+        impl<'a> TryFrom<BinnValue<'a>> for $t {
             type Error = WrongBinnValue;
 
-            fn try_from(value: BinnValue) -> Result<Self, Self::Error> {
+            fn try_from(value: BinnValue<'a>) -> Result<Self, Self::Error> {
                 if let BinnValue::$enum(x) = value {
                     Ok(x)
                 } else {
@@ -74,11 +76,12 @@ impl_tryfrom!(u64, UInt64);
 impl_tryfrom!(f32, Float32);
 impl_tryfrom!(f64, Float64);
 impl_tryfrom!(bool, Bool);
+impl_tryfrom!(&'a CStr, Str);
 
 #[derive(Debug)]
 pub struct BinnObject(*mut binn_sys::binn);
 
-impl BinnObject {
+impl<'a> BinnObject {
     pub fn new() -> Self {
         unsafe {
             let mut obj = binn_sys::binn_object();
@@ -87,7 +90,7 @@ impl BinnObject {
         }
     }
 
-    pub fn set<T: Into<BinnValue>>(&mut self, key: &CStr, value: T) {
+    pub fn set<T: Into<BinnValue<'a>>>(&mut self, key: &CStr, value: T) {
         fn addr<T>(x: &T) -> *mut c_void {
             x as *const T as *mut c_void
         }
@@ -103,6 +106,9 @@ impl BinnObject {
             BinnValue::Float32(x) => self.set_object(key, binn_sys::BINN_FLOAT32, addr(&x), 0),
             BinnValue::Float64(x) => self.set_object(key, binn_sys::BINN_FLOAT64, addr(&x), 0),
             BinnValue::Bool(x) => self.set_object(key, binn_sys::BINN_BOOL, addr(&x), 0),
+            BinnValue::Str(x) => {
+                self.set_object(key, binn_sys::BINN_STRING, x.as_ptr() as *mut c_void, 0)
+            }
         };
     }
 
@@ -145,12 +151,15 @@ impl BinnObject {
                     .as_ref()
                     .map(|p| BinnValue::Float64(*p)),
                 binn_sys::BINN_BOOL => (pval as *const bool).as_ref().map(|p| BinnValue::Bool(*p)),
+                binn_sys::BINN_STRING => (pval as *const c_char)
+                    .as_ref()
+                    .map(|p| BinnValue::Str(CStr::from_ptr(p))),
                 _ => None,
             }
         }
     }
 
-    pub fn get_as<T: TryFrom<BinnValue>>(&self, key: &CStr) -> Option<T> {
+    pub fn get_as<T: TryFrom<BinnValue<'a>>>(&'a self, key: &CStr) -> Option<T> {
         self.get(key).and_then(|v| v.try_into().ok())
     }
 }
@@ -183,6 +192,7 @@ mod tests {
         let mut binn = BinnObject::new();
 
         let k = |s: &str| -> CString { CString::new(s).unwrap() };
+        let hello = CStr::from_bytes_with_nul(b"hello\0").unwrap();
 
         binn.set(&k("i8"), 42i8);
         binn.set(&k("i16"), 42i16);
@@ -195,6 +205,7 @@ mod tests {
         binn.set(&k("f32"), 3.14f32);
         binn.set(&k("f64"), 3.14f64);
         binn.set(&k("bool"), true);
+        binn.set(&k("str"), hello);
 
         assert_eq!(binn.get_as::<i8>(&k("i8")), Some(42));
         assert_eq!(binn.get_as::<i16>(&k("i16")), Some(42));
@@ -207,6 +218,7 @@ mod tests {
         assert_eq!(binn.get_as::<f32>(&k("f32")), Some(3.14));
         assert_eq!(binn.get_as::<f64>(&k("f64")), Some(3.14));
         assert_eq!(binn.get_as::<bool>(&k("bool")), Some(true));
+        assert_eq!(binn.get_as::<&CStr>(&k("str")), Some(hello));
         assert_eq!(binn.get_as::<bool>(&k("random")), None);
     }
 }
