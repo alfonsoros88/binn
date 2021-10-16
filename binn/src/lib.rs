@@ -162,6 +162,13 @@ impl<'a> BinnObject {
     pub fn get_as<T: TryFrom<BinnValue<'a>>>(&'a self, key: &CStr) -> Option<T> {
         self.get(key).and_then(|v| v.try_into().ok())
     }
+    pub fn as_bytes(&self) -> &[u8] {
+        unsafe {
+            let ptr = binn_sys::binn_ptr(self.0 as *mut c_void);
+            let size = binn_sys::binn_size(self.0 as *mut c_void) as usize;
+            std::slice::from_raw_parts(ptr as *const u8, size)
+        }
+    }
 }
 
 impl Drop for BinnObject {
@@ -176,9 +183,25 @@ impl Default for BinnObject {
     }
 }
 
+#[derive(Debug)]
+pub struct BinnOpenError;
+
+impl TryFrom<&[u8]> for BinnObject {
+    type Error = BinnOpenError;
+
+    fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
+        let binn = unsafe { binn_sys::binn_open(data.as_ptr() as *mut c_void) };
+        if binn.is_null() {
+            Err(BinnOpenError)
+        } else {
+            Ok(BinnObject(binn))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::ffi::CString;
+    use std::{convert::TryInto, ffi::CString};
 
     use super::*;
 
@@ -220,5 +243,42 @@ mod tests {
         assert_eq!(binn.get_as::<bool>(&k("bool")), Some(true));
         assert_eq!(binn.get_as::<&CStr>(&k("str")), Some(hello));
         assert_eq!(binn.get_as::<bool>(&k("random")), None);
+    }
+
+    #[test]
+    fn as_bytes_test() {
+        let mut binn = BinnObject::new();
+
+        let k = |s: &str| -> CString { CString::new(s).unwrap() };
+        let hello = CStr::from_bytes_with_nul(b"hello\0").unwrap();
+
+        binn.set(&k("i8"), 42i8);
+        binn.set(&k("i16"), 42i16);
+        binn.set(&k("i32"), 42i32);
+        binn.set(&k("i64"), 42i64);
+        binn.set(&k("u8"), 42u8);
+        binn.set(&k("u16"), 42u16);
+        binn.set(&k("u32"), 42u32);
+        binn.set(&k("u64"), 42u64);
+        binn.set(&k("f32"), 3.14f32);
+        binn.set(&k("f64"), 3.14f64);
+        binn.set(&k("bool"), true);
+        binn.set(&k("str"), hello.as_ref());
+
+        let other_binn: BinnObject = binn.as_bytes().try_into().expect("failed to deserialize");
+
+        assert_eq!(other_binn.get_as::<i8>(&k("i8")), Some(42));
+        assert_eq!(other_binn.get_as::<i16>(&k("i16")), Some(42));
+        assert_eq!(other_binn.get_as::<i32>(&k("i32")), Some(42));
+        assert_eq!(other_binn.get_as::<i64>(&k("i64")), Some(42));
+        assert_eq!(other_binn.get_as::<u8>(&k("u8")), Some(42));
+        assert_eq!(other_binn.get_as::<u16>(&k("u16")), Some(42));
+        assert_eq!(other_binn.get_as::<u32>(&k("u32")), Some(42));
+        assert_eq!(other_binn.get_as::<u64>(&k("u64")), Some(42));
+        assert_eq!(other_binn.get_as::<f32>(&k("f32")), Some(3.14));
+        assert_eq!(other_binn.get_as::<f64>(&k("f64")), Some(3.14));
+        assert_eq!(other_binn.get_as::<bool>(&k("bool")), Some(true));
+        assert_eq!(other_binn.get_as::<&CStr>(&k("str")), Some(hello));
+        assert_eq!(other_binn.get_as::<bool>(&k("random")), None);
     }
 }
