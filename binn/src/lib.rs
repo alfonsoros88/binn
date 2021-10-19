@@ -21,6 +21,7 @@ pub enum BinnValue<'a> {
     Float64(f64),
     Bool(bool),
     Str(&'a CStr),
+    Object(BinnObject),
 }
 
 macro_rules! impl_from {
@@ -45,6 +46,7 @@ impl_from!(f32, Float32);
 impl_from!(f64, Float64);
 impl_from!(bool, Bool);
 impl_from!(&'a CStr, Str);
+impl_from!(BinnObject, Object);
 
 #[derive(Debug)]
 pub struct WrongBinnValue;
@@ -77,6 +79,7 @@ impl_tryfrom!(f32, Float32);
 impl_tryfrom!(f64, Float64);
 impl_tryfrom!(bool, Bool);
 impl_tryfrom!(&'a CStr, Str);
+impl_tryfrom!(BinnObject, Object);
 
 #[derive(Debug)]
 pub struct BinnObject(*mut binn_sys::binn);
@@ -108,6 +111,12 @@ impl<'a> BinnObject {
             BinnValue::Bool(x) => self.set_object(key, binn_sys::BINN_BOOL, addr(&x), 0),
             BinnValue::Str(x) => {
                 self.set_object(key, binn_sys::BINN_STRING, x.as_ptr() as *mut c_void, 0)
+            }
+            BinnValue::Object(x) => {
+                let bytes = x.as_bytes();
+                let ptr = bytes.as_ptr() as *mut c_void;
+                let size = bytes.len();
+                self.set_object(key, binn_sys::BINN_OBJECT, ptr, size)
             }
         };
     }
@@ -154,6 +163,12 @@ impl<'a> BinnObject {
                 binn_sys::BINN_STRING => (pval as *const c_char)
                     .as_ref()
                     .map(|p| BinnValue::Str(CStr::from_ptr(p))),
+                binn_sys::BINN_OBJECT => {
+                    let bytes = std::slice::from_raw_parts(pval as *const u8, psize as usize);
+                    TryInto::<BinnObject>::try_into(bytes)
+                        .ok()
+                        .map(BinnValue::Object)
+                }
                 _ => None,
             }
         }
@@ -280,5 +295,23 @@ mod tests {
         assert_eq!(other_binn.get_as::<bool>(&k("bool")), Some(true));
         assert_eq!(other_binn.get_as::<&CStr>(&k("str")), Some(hello));
         assert_eq!(other_binn.get_as::<bool>(&k("random")), None);
+    }
+
+    #[test]
+    fn recursive_object_test() {
+        let mut outer = BinnObject::new();
+        let mut inner = BinnObject::new();
+
+        let k = |s: &str| -> CString { CString::new(s).unwrap() };
+
+        inner.set(&k("val"), 42i8);
+        outer.set(&k("obj"), inner);
+
+        assert_eq!(
+            outer
+                .get_as::<BinnObject>(&k("obj"))
+                .and_then(|o| o.get_as::<i8>(&k("val"))),
+            Some(42)
+        );
     }
 }
