@@ -10,4 +10,10 @@ fn main() {
     bindings
         .write_to_file(out_path.join("bindings.rs"))
         .expect("failed to write bindings");
+
+    cc::Build::new()
+        .file("binn/src/binn.c")
+        .flag("-Wno-unused-parameter")
+        .flag("-Wno-implicit-fallthrough")
+        .compile("libbinn.a");
 }
